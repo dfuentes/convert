@@ -19,6 +19,7 @@ var (
 	preset         = flag.String("p", "medium", "h264 preset")
 	crf            = flag.String("c", "19", "h264 crf setting")
 	deleteOriginal = flag.Bool("d", false, "delete original files")
+	recursive      = flag.Bool("r", false, "recursive")
 )
 
 type FfprobeOutput struct {
@@ -52,26 +53,13 @@ func main() {
 	}
 
 	inputs := flag.Args()
+
 	filesToConvert := make([]string, 0)
 
 	for _, input := range inputs {
-
-		info, err := os.Stat(input)
-		if err != nil {
-			log.Fatalf("unable to stat input file: %s", err)
-		}
-
-		if info.IsDir() {
-			entries, err := ioutil.ReadDir(input)
-			if err != nil {
-				log.Fatalf("unable to read dir: %s", err)
-			}
-			for _, entry := range entries {
-				filesToConvert = append(filesToConvert,
-					path.Join(input, entry.Name()))
-			}
-		} else {
-			filesToConvert = append(filesToConvert, input)
+		subFiles := gatherFiles(input, *recursive)
+		for _, entry := range subFiles {
+			filesToConvert = append(filesToConvert, entry)
 		}
 	}
 
@@ -89,6 +77,35 @@ func main() {
 
 	close(fileChan)
 	wg.Wait()
+}
+
+func gatherFiles(root string, recursive bool) []string {
+	toExplore := make([]string, 0)
+	toExplore = append(toExplore, root)
+	files := make([]string, 0)
+	depth1 := true
+
+	for len(toExplore) > 0 {
+		current := toExplore[len(toExplore)-1]
+		toExplore = toExplore[:len(toExplore)-1]
+		info, err := os.Stat(current)
+		if err != nil {
+			log.Fatalf("unable to stat path: %s", err)
+		}
+		if info.IsDir() && (recursive || depth1) {
+			entries, err := ioutil.ReadDir(current)
+			if err != nil {
+				log.Fatalf("unable to read dir: %s", err)
+			}
+			for _, entry := range entries {
+				toExplore = append(toExplore, path.Join(current, entry.Name()))
+			}
+			depth1 = false
+		} else if !info.IsDir() {
+			files = append(files, current)
+		}
+	}
+	return files
 }
 
 func convertWorker(fileChan <-chan string, wg *sync.WaitGroup) {
