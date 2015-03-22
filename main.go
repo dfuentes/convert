@@ -9,10 +9,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"gopkg.in/fsnotify.v1"
 )
 
 var (
@@ -22,6 +24,7 @@ var (
 	deleteOriginal = flag.Bool("d", false, "delete original files")
 	recursive      = flag.Bool("r", false, "recursive")
 	outputDir      = flag.String("o", "", "output directory")
+	watchFlag = flag.Bool("w", false, "watch directory for new files")
 )
 
 type FfprobeOutput struct {
@@ -50,9 +53,18 @@ func main() {
 		os.Exit(1)
 	}
 	flag.Parse()
+
 	if flag.NArg() == 0 {
 		flag.Usage()
 	}
+	if *watchFlag {
+		if *outputDir == "" {
+			log.Fatal("Must specify output directory with watch")
+		}
+		watch(flag.Args()[0])
+		return
+	}
+
 
 	inputs := flag.Args()
 	filesToConvert := make([]string, 0)
@@ -176,16 +188,18 @@ func convert(path string) (outpath string, err error) {
 		return outpath, nil
 	}
 
+	tmp := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s", filepath.Base(path)))
 	cmdArgs := []string{"-i", path}
 	cmdArgs = append(cmdArgs, "-c:v", "libx264", "-crf", *crf, "-preset", *preset)
 	cmdArgs = append(cmdArgs, "-c:a", "aac", "-strict", "experimental")
 	cmdArgs = append(cmdArgs, "-b:a", "192k", "-ac", "2")
-	cmdArgs = append(cmdArgs, outpath)
+	cmdArgs = append(cmdArgs, tmp)
 
 	log.Printf("Converting %s to %s...", path, outpath)
 	cmd := exec.Command("ffmpeg", cmdArgs...)
 	err = cmd.Run()
 	if err == nil {
+		os.Rename(tmp, outpath)
 		log.Printf("Finished converting %s to %s.", path, outpath)
 		if *deleteOriginal {
 			log.Printf("Removing original")
@@ -217,4 +231,53 @@ func Copy(src, dst string) error {
 		return err
 	}
 	return d.Close()
+}
+
+func watch(path string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer watcher.Close()
+	
+	go func() {
+		for {
+			select {
+			case event := <- watcher.Events:
+				if event.Op&fsnotify.Create == fsnotify.Create {
+					finfo, _ := os.Stat(event.Name)
+					if finfo.IsDir() {
+						watcher.Add(event.Name)
+						continue
+					}
+					// Only check for video files, ignore hidden files
+					base := filepath.Base(event.Name)
+					ext := filepath.Ext(base)
+					if !strings.HasPrefix(base, ".") && stringIn(ext, []string{".mp4", ".avi", ".mkv"}) {
+						go convert(event.Name)
+					}
+				}
+			case watchErr := <- watcher.Errors:
+				log.Fatal(watchErr)
+			}
+		}
+	}()
+
+	err = watcher.Add(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Kill, os.Interrupt)
+	<-c
+}
+
+func stringIn(val string, choices []string) bool {
+	for _, s := range choices {
+		if val == s {
+			return true
+		}
+	}
+	return false
 }
