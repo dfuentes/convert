@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -20,6 +21,7 @@ var (
 	crf            = flag.String("c", "19", "h264 crf setting")
 	deleteOriginal = flag.Bool("d", false, "delete original files")
 	recursive      = flag.Bool("r", false, "recursive")
+	outputDir      = flag.String("o", "", "output directory")
 )
 
 type FfprobeOutput struct {
@@ -53,7 +55,6 @@ func main() {
 	}
 
 	inputs := flag.Args()
-
 	filesToConvert := make([]string, 0)
 
 	for _, input := range inputs {
@@ -155,14 +156,25 @@ func convert(path string) (outpath string, err error) {
 		}
 	}
 
-	if audioCodec == "aac" && videoCodec == "h264" && filepath.Ext(path) == ".mp4" {
-		log.Printf("Conversion unneccessary for %s.", path)
-		outpath = path
-		err = nil
-		return
+	outputFilename := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + ".mp4"
+	if *outputDir == "" {
+		outpath = filepath.Join(filepath.Dir(path), outputFilename)
+	} else {
+		outpath = filepath.Join(*outputDir, outputFilename)
 	}
 
-	outpath = strings.TrimSuffix(path, filepath.Ext(path)) + ".mp4"
+	if audioCodec == "aac" && videoCodec == "h264" && filepath.Ext(path) == ".mp4" {
+		log.Printf("Conversion unneccessary for %s", path)
+		if *deleteOriginal {
+			err = os.Rename(path, outpath)
+		} else {
+			err = Copy(path, outpath)
+		}
+		if err != nil {
+			return path, err
+		}
+		return outpath, nil
+	}
 
 	cmdArgs := []string{"-i", path}
 	cmdArgs = append(cmdArgs, "-c:v", "libx264", "-crf", *crf, "-preset", *preset)
@@ -183,4 +195,26 @@ func convert(path string) (outpath string, err error) {
 		log.Printf("Unable to convert file %s: %s", path, err)
 	}
 	return
+}
+
+func Copy(src, dst string) error {
+	if src == dst {
+		return nil
+	}
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	// no need to check errors on read only file, we already got everything
+	// we need from the filesystem, so nothing can go wrong now.
+	defer s.Close()
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(d, s); err != nil {
+		d.Close()
+		return err
+	}
+	return d.Close()
 }
