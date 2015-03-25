@@ -188,7 +188,7 @@ func convert(path string) (outpath string, err error) {
 		return outpath, nil
 	}
 
-	tmp := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s", filepath.Base(path)))
+	tmp := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s", outputFilename))
 	cmdArgs := []string{"-i", path}
 	cmdArgs = append(cmdArgs, "-c:v", "libx264", "-crf", *crf, "-preset", *preset)
 	cmdArgs = append(cmdArgs, "-c:a", "aac", "-strict", "experimental")
