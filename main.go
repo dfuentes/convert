@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"gopkg.in/fsnotify.v1"
 	"io"
 	"io/ioutil"
 	"log"
@@ -14,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"gopkg.in/fsnotify.v1"
 )
 
 var (
@@ -24,7 +24,7 @@ var (
 	deleteOriginal = flag.Bool("d", false, "delete original files")
 	recursive      = flag.Bool("r", false, "recursive")
 	outputDir      = flag.String("o", "", "output directory")
-	watchFlag = flag.Bool("w", false, "watch directory for new files")
+	watchFlag      = flag.Bool("w", false, "watch directory for new files")
 )
 
 type FfprobeOutput struct {
@@ -64,7 +64,6 @@ func main() {
 		watch(flag.Args()[0])
 		return
 	}
-
 
 	inputs := flag.Args()
 	filesToConvert := make([]string, 0)
@@ -233,31 +232,42 @@ func Copy(src, dst string) error {
 	return d.Close()
 }
 
+func isVid(path string) bool {
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	if !strings.HasPrefix(base, ".") && stringIn(ext, []string{".mp4", ".avi", ".mkv"}) {
+		return true
+	}
+	return false
+}
+
 func watch(path string) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer watcher.Close()
-	
+
 	go func() {
 		for {
 			select {
-			case event := <- watcher.Events:
+			case event := <-watcher.Events:
 				if event.Op&fsnotify.Create == fsnotify.Create {
 					finfo, _ := os.Stat(event.Name)
 					if finfo.IsDir() {
-						watcher.Add(event.Name)
+						files := gatherFiles(event.Name, true)
+						for _, file := range files {
+							if isVid(file) {
+								go convert(file)
+							}
+						}
 						continue
 					}
-					// Only check for video files, ignore hidden files
-					base := filepath.Base(event.Name)
-					ext := filepath.Ext(base)
-					if !strings.HasPrefix(base, ".") && stringIn(ext, []string{".mp4", ".avi", ".mkv"}) {
+					if isVid(event.Name) {
 						go convert(event.Name)
 					}
 				}
-			case watchErr := <- watcher.Errors:
+			case watchErr := <-watcher.Errors:
 				log.Fatal(watchErr)
 			}
 		}
