@@ -76,12 +76,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	fileChan := make(chan string)
-
-	for i := 0; i < *numWorkers; i++ {
-		wg.Add(1)
-		go convertWorker(fileChan, &wg)
-	}
+	fileChan := startWorkers(&wg)
 
 	for _, file := range filesToConvert {
 		fileChan <- file
@@ -89,6 +84,15 @@ func main() {
 
 	close(fileChan)
 	wg.Wait()
+}
+
+func startWorkers(wg *sync.WaitGroup) chan string {
+	fileChan := make(chan string)
+	for i := 0; i < *numWorkers; i++ {
+		wg.Add(1)
+		go convertWorker(fileChan, wg)
+	}
+	return fileChan
 }
 
 func gatherFiles(root string, recursive bool) []string {
@@ -248,6 +252,9 @@ func watch(path string) {
 	}
 	defer watcher.Close()
 
+	var wg sync.WaitGroup
+	fileChan := startWorkers(&wg)
+
 	go func() {
 		for {
 			select {
@@ -258,13 +265,13 @@ func watch(path string) {
 						files := gatherFiles(event.Name, true)
 						for _, file := range files {
 							if isVid(file) {
-								go convert(file)
+								fileChan <- file
 							}
 						}
 						continue
 					}
 					if isVid(event.Name) {
-						go convert(event.Name)
+						fileChan <- event.Name
 					}
 				}
 			case watchErr := <-watcher.Errors:
@@ -281,6 +288,8 @@ func watch(path string) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Kill, os.Interrupt)
 	<-c
+	close(fileChan)
+	wg.Wait()
 }
 
 func stringIn(val string, choices []string) bool {
